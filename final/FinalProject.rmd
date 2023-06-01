@@ -1,0 +1,360 @@
+---
+title: "Modern Data Mining - Final Project on Analyzing Credit Scores"
+author:
+- Zhijian Wang
+- Vikramaditya Singh
+- Keshav Ramesh
+date: 'Due: 11:59Pm,  4/30, 2023'
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: '4'
+  html_document:
+    code_folding: show
+    highlight: haddock
+    theme: lumen
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+  word_document:
+    toc: yes
+    toc_depth: '4'
+urlcolor: blue  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.height=4, fig.width=6, warning = F)
+
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(car, janitor, sjmisc, stringr, randomForest, tree, ISLR, rpart, rattle, pROC, partykit, ggplot2, glmnet, leaps, dplyr, keras, neuralnet, imager, ranger, lubridate, tm, tidytext, wordcloud, ggcorrplot, rpart, rpart.plot, randomForest, fastDummies)
+#devtools::install_github("rstudio/keras")
+#library(keras)
+#install_keras()
+```
+
+## Description
+
+It is always difficult to find out what actually make our credit scores become better or become worse. So in this project, we are going to figure out which factors are the best predictors of credit scores, and which models give us the greatest accuracy in our results. We are going to use EDA and machine learning models in our data analysis process.
+
+Variables:
+
+ID: a unique identification for each row; Customer_ID: a unique identification of a person; Month: month of the year; Name: name of the person; Age: age of the person; SSN: social security number of the person; Occupation: occupation of the person; Annual_Income: annual income of the person; Monthly_Inhand_Salary: monthly base salary of the person; Num_Bank_Accounts: number of bank accounts the person holds;
+
+Num_Credit_Card: number of other credit cards held by the person; Interest_Rate: interest rate on credit card; Num_of_Loan: number of loans taken from the bank; Type_of_Loan: types of loan taken by the person; Delay_from_due_date: average number of days delayed from the payment date; Num_of_Delayed_Payment: average number of payments delayed by the person; Changed_Credit_Limit: percentage change in credit card limit;
+
+Num_Credit_Inquiries: number of credit card inquiries; Credit_Mix: classification of the mix of credits; Outstanding_Debt: remaining debt to be paid; Credit_Utilization_Ratio: utilization ratio of credit card; Credit_History_Age: age of credit history of the person; Payment_of_Min_Amount: checks whether only the minimum amount was paid by the person; Total_EMI_per_month: monthly EMI payments;
+
+Amount_invested_monthly: monthly amount invested by the customer; Payment_Behaviour: payment behavior of the customer; Monthly_Balance: monthly balance amount of the customer; Credit_Score: bracket of credit score (Poor, Standard, Good);
+
+
+## Objectives
+
+- Data reading/cleaning, EDA, ML model, Logistic regression, ML model, PCA, Neural Networks, Decision Trees, Random Forest; Data needed: `train.csv`
+
+## Data Reading and Cleaning
+
+As we can see, we have 100000 rows and 28 columns.
+```{r}
+df <- read.csv("/Users/keshavramesh/STAT471/finalproject/data/train.csv", header = T)
+cat("Data set Shape:")
+dim(df)
+```
+We first need to change the Type_Of_Loan Column. After we observe the data, we find that these data needs to filtered and understood better. We have so many categories. We need to reduce them.
+```{r}
+cat("Before Conversion: Number of Unique Type in Loan")
+loan_types <- unique(df$Type_of_Loan)
+length(loan_types)
+total_types <- c()
+for (e in df$Type_of_Loan){
+  e <- str_replace(e, "and ", " ")
+  more_elements <- strsplit(e, ", ")
+  for (e2 in more_elements){
+    total_types <- append(total_types, trimws(tolower(e2)))
+  }
+  total_types <- unique(total_types)
+}
+cat("After ConversionNumber of Unique Type in Loan")
+total_types
+```
+We first need to change the Type_Of_Loan Column. After we observe the data, we find that these data needs to filtered and understood better. We have so many categories. We need to reduce them.
+```{r}
+for (l in total_types){
+   df <- df %>%
+    mutate(!!l := if_else(grepl(l, tolower(Type_of_Loan)), "1", "0"))
+}
+df <- clean_names(df)
+```
+We will now do the transformation for "Payment_Behaviour" To Extract "Spent" and "Value".
+However, because R is only so good in when doing analysis, we will first try to only include Payment Behaviour only include "spent" and "value."
+```{r}
+cat("Unique payment_behaviour")
+length(unique((df$payment_behaviour)))
+df$spent <- sapply(strsplit(tolower(df$payment_behaviour), "_"), "[", 1)
+df$value <- sapply(strsplit(tolower(df$payment_behaviour), "_"), "[", 3)
+cat("Unique class in spent")
+unique(df$spent)
+cat("Unique class in value")
+unique(df$value)
+```
+And lastly, we are going to drop some columns and change some categorical variables to factor variables.
+```{r}
+drops <- c("id","customer_id", "name", "ssn", "type_of_loan")
+df$occupation <- as.factor(df$occupation)
+df$credit_mix <- as.factor(df$credit_mix)
+df$payment_of_min_amount <- as.factor(df$payment_of_min_amount)
+df$payment_behaviour <- as.factor(df$payment_behaviour)
+df$spent <- as.factor(df$spent)
+df$value <- as.factor(df$value)
+df$credit_score <- as.factor(df$credit_score)
+df <- df[,!(names(df) %in% drops)]
+df <- as.data.frame(unclass(df),stringsAsFactors=TRUE)
+names(df)
+```
+
+## Exploratory Data Analysis (EDA)
+
+Bar Plot of Credit Scores
+```{r}
+level <- c("Poor", "Standard", "Good")
+# df %>% dplyr::mutate(credit_score = factor(credit_score,
+                                  # levels = level)) %>%
+# ggplot(aes(x=credit_score, fill = credit_score) ) + geom_bar() + geom_text(stat='count', aes(label=after_stat(count)), vjust=-1) +
+        # ggtitle("Bar Plot Credit Score") + theme(plot.title = element_text(hjust = 0.5))
+```
+
+As we can see, more than half of the people are going to get a Standard credit score. There are only 1/5 of people that can have a Good credit score.
+
+Spaghetti Plot of Age versus Income
+```{r}
+df_age_credit_salary <- df %>% group_by(age, credit_score) %>% summarize(mean_salary = mean(annual_income), .groups = 'drop')
+# ggplot(df_age_credit_salary, aes(x = factor(age), y = mean_salary, group = credit_score, color = credit_score)) + geom_line()
+```
+After observing the data, we can say there is a strong correlation between annual salary and credit score. We can also find that the people tend to get higher credit score when their salary is higher. Also, we can see that when people are over 47 years old there does not seem to be a big correlation between salary and credit score.
+
+Correlation Heatmap
+```{r}
+library(ggcorrplot)
+# model.matrix(~0+., data=df) %>%
+        # cor(use="pairwise.complete.obs") %>%
+        # ggcorrplot(show.diag=FALSE,  lab=TRUE, lab_size=1)
+```
+
+## Machine Learning Model through Logistic Regression and LASSO
+
+Logistic Regression Model with Lasso
+
+Train and test split in R. In the class we have been taught binomial logistic regression, so we will only select good and poor credit scores and attempt to predict them.
+```{r}
+df_ml <- df[seq(1, nrow(df), 12), ]
+df_ml <- df_ml[which(df_ml$credit_score == "Good" | df_ml$credit_score == "Poor"), ]
+cat("Before Conversion")
+table(df_ml$credit_score)
+i <- sapply(df_ml, is.factor)
+df_ml[i] <- lapply(df_ml[i], as.character)
+df_ml <- as.data.frame(unclass(df_ml),stringsAsFactors=TRUE)
+cat("After Conversion")
+table(df_ml$credit_score)
+```
+
+```{r}
+smp_size <- 0.75 * nrow(df_ml)
+train_ind <- sample(seq_len(nrow(df_ml)), size = smp_size)
+df_train <- df_ml[train_ind, ]
+df_test <- df_ml[-train_ind, ]
+X <- model.matrix(credit_score ~.,df_train)[,-1]
+Y <- df_train[, "credit_score"]
+fit1.cv <- cv.glmnet(X, Y, alpha=1, family="binomial", nfolds = 10, type.measure = "deviance")
+# plot(fit1.cv)
+```
+From this graph, lambda.min = 32 and lambda.1se = 12.
+```{r}
+coef.1se <- coef(fit1.cv, s="lambda.1se")
+coef.1se <- coef.1se[which(coef.1se !=0),]
+coef.1se[order(abs(coef.1se), decreasing = TRUE)]
+
+coef.min <- coef(fit1.cv, s="lambda.min")
+coef.min <- coef.min[which(coef.min !=0),]
+coef.min[order(abs(coef.min), decreasing = TRUE)]
+```
+After observing both of the models, it seems that we will use model.1se as the column in my final model, as model.min seems to be too complex.
+```{r}
+final.model.1 <- glm(credit_score ~num_credit_card + interest_rate +num_of_loan + delay_from_due_date + credit_mix+
+        payment_behaviour + delay_from_due_date + num_credit_inquiries + outstanding_debt +
+        credit_history_age + payment_of_min_amount + total_emi_per_month + no_data +
+        value,data = df_train, family = "binomial")
+Anova(final.model.1)
+```
+The p-value for num_credit_inquries and value and payment_of_min_amount and outstanding_debt is larger than alpha = 0.05, so the result is not statistically significant and we can remove them to proceed the analysis.
+```{r}
+final.model.2 <- glm(credit_score ~num_credit_card + interest_rate + num_of_loan + credit_mix +
+        payment_behaviour + credit_history_age + total_emi_per_month +
+        no_data,data = df_train, family = "binomial")
+summary(final.model.2)
+```
+The above variables is associated with the credit score. Then we will get the coefficient.
+```{r}
+summary(final.model.2)$coefficients[order(abs(summary(final.model.2)$coefficients[, "Estimate"]), decreasing = TRUE),]
+```
+From this graph, we can say people who set payment_of_min_amount to yes and have many credit cards will tend to have bad credit scores. What is more interesting is that people do not necessarily always need a reason to borrow the money if they have a higher credit score. This strange situation happens because the bank will only lend money to people with good credit scores with no provided reason. Now, we are going to test the accuracy of our model.
+```{r}
+final.model.2 <- glm(credit_score ~num_credit_card + interest_rate + num_of_loan + credit_mix +
+        payment_behaviour + credit_history_age + total_emi_per_month +
+        no_data,data = df_train, family = "binomial")
+y_pred <- predict(final.model.2, newdata = df_train, type = "response")
+y_pred_binary <- ifelse(y_pred > 0.5, "Bad", "Good")
+y_test <- df_train$credit_score
+accuracy <- sum(y_pred_binary == y_test) / length(y_test)
+cat("Accuracy:", accuracy)
+```
+It seems that the accuracy is really low. We believe that the neural network will fix the low accuracy problem, but logistic regression demonstrates to us the idea that "credit_mix", "payment_behaviour", and "num_of_loan" are predictor variables that are strongly associated with credit scores.
+
+## Principal Component Analysis (PCA)
+
+We will now conduct PCA to identify and select our most important factors and remove the ones not needed.
+```{r}
+# Conduct PCA and print summary
+numeric_vars <- which(sapply(df_ml, is.numeric))
+pca <- prcomp(df_ml[, numeric_vars], center = TRUE, scale. = TRUE)
+summary(pca)
+```
+From the above results we can see that we can see the first 14-15 variables seem to have good Proportion of Variance along with a decent Standard Deviation. They also have a cumulative proportion of 0.96067.
+```{r}
+# Visualize explained variance by each principal component
+scree_plot <- function(pca_obj) {
+  variance_pct <- (pca_obj$sdev^2) / sum(pca_obj$sdev^2)
+  df_var <- data.frame(component = 1:length(variance_pct), variance = variance_pct)
+  ggplot(df_var, aes(x = component, y = variance)) + geom_point() + geom_line(group = 1) +
+    xlab("Principal Component") + ylab("Proportion of Explained Variance") +
+    ggtitle("Scree Plot") + theme_minimal()
+}
+# scree_plot(pca)
+```
+We see the scree plot leveling off at 11. Thus, our PCA choice should be around that number.
+
+```{r}
+# Calculate the cumulative proportion of variance explained
+eigenvalues <- pca$sdev^2
+variance_pct <- eigenvalues / sum(eigenvalues)
+cumulative_variance_pct <- cumsum(variance_pct)
+cumulative_variance_pct
+```
+We see the 14th component has a cumulative variance of approximately 96%, which is good enough for our model. At 11, we only have approximately 91%, which is not acceptable. Thus, despite the scree plot leveling off at 11, the cumulative variance is not enough for us to accept only 11 components. 
+```{r}
+# Create a scree plot of the cumulative proportion of variance explained
+df_cum_var <- data.frame(component = 1:length(cumulative_variance_pct), 
+                         cumulative_variance = cumulative_variance_pct)
+
+scree_plot_cumulative <- ggplot(df_cum_var, aes(x = component, y = cumulative_variance)) +
+  geom_point(color = "blue") + geom_line(color = "blue", group = 1) +
+  geom_hline(yintercept = 0.95, linetype = "dashed", color = "red") +
+  labs(x = "Principal Components", y = "Cumulative Proportion of Variance Explained",
+       title = "Scree Plot: Cumulative Proportion of Variance Explained") +
+  theme_minimal() + theme(plot.title = element_text(hjust = 0.5))
+# print(scree_plot_cumulative)
+```
+Here, we choose 14 as the optimal number of components. 
+```{r}
+# Determine the optimal number of principal components and create a new dataframe
+optimal_n <- which(cumulative_variance_pct >= 0.95)[1]
+cat("Optimal number of principal components:", optimal_n)
+pca_df <- as.data.frame(pca$x[, 1:optimal_n])
+```
+
+```{r}
+# 2D plot of the first two principal components
+pca_2D <- ggplot(pca_df, aes(x = PC1, y = PC2)) + geom_point() + theme_minimal() +
+  labs(x = "Principal Component 1", y = "Principal Component 2", title = "PCA 2D Plot")
+# print(pca_2D)
+```
+
+## Neural Network
+
+It is quite complex to convert categorical variable into dummy variable in the neural net, so finally, we applied the fastDummies package in R to fix the problem.
+```{r}
+# create dummy variable
+i <- sapply(df_ml, is.factor)
+df_ml_X <- data.frame(df_ml)
+df_ml_X[i] <- lapply(df_ml_X[i], as.character)
+df_ml_X <- df_ml_X[,-which(names(df_ml_X) == "credit_score")]
+df_ml_X <- fastDummies::dummy_cols(df_ml_X)
+cat <- sapply(df_ml_X , is.character)
+df_ml_X <- df_ml_X[,!cat]
+data_xtrain <- as.matrix(df_ml_X[train_ind, ])
+data_ytrain <- as.matrix(ifelse(df_train[,which(names(df_train) == "credit_score")] == "Good", 1, 0))
+
+data_xtest <-as.matrix(df_ml_X[-train_ind, ])
+data_ytest <-as.matrix(ifelse(df_test[,which(names(df_test) == "credit_score")] == "Good", 1, 0))
+p <- dim(data_xtrain)[2] # number of input variables
+model <- keras_model_sequential() %>%
+        layer_dense(units = 64, activation = "relu", input_shape = c(p)) %>%
+        layer_dense(units = 32, activation = "relu", input_shape = 64) %>%
+        layer_dense(units = 1, activation = "sigmoid") # output
+summary(model)
+```
+
+```{r}
+model %>% compile(
+        optimizer = optimizer_adam(), loss = "binary_crossentropy", metrics = c("accuracy"))
+nn.fit1 <- model %>% fit(
+        data_xtrain, data_ytrain, epochs = 30, batch_size = 128, validation_split = .15)
+# plot(nn.fit1)
+```
+The best epoch in this graph seems to be around 10. Thus, we will retrain this model to finally test our model.
+```{r}
+p <- dim(data_xtrain)[2] # number of input variables
+model <- keras_model_sequential() %>%
+        layer_dense(units = 64, activation = "relu", input_shape = c(p)) %>%
+        layer_dense(units = 32, activation = "relu", input_shape = 64) %>%
+        layer_dense(units = 16, activation = "relu", input_shape = 32) %>%
+        layer_dense(units = 1, activation = "sigmoid") # output
+model %>% compile(
+        optimizer = optimizer_adam(), loss = "binary_crossentropy",
+        metrics = c("accuracy")
+)
+model %>% fit(
+        data_xtrain, data_ytrain, epochs = 10, batch_size = 128)
+results <- model %>% evaluate(data_xtest, data_ytest) ;
+```
+After retraining we see that our accuracy becomes 0.8124352, which is much higher than the logistic regression, whose accuracy is around 0.35. However, compared to logistic regression, the drawback of the neural network is that we cannot understand which attributes will increase or decrease the credit score. Thus, we will use a decision tree to help us fix this problem.
+
+## Decision Trees
+
+```{r}
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+
+# Create and visualize a decision tree
+dt <- rpart(credit_score ~ ., data = df_train, method = "class")
+# rpart.plot(dt)
+```
+
+```{r}
+# Predict the credit scores on the test set and calculate accuracy
+dt_pred <- predict(dt, newdata = df_test, type = "class")
+dt_accuracy <- mean(dt_pred == df_test$credit_score)
+cat("Decision Tree Accuracy:", dt_accuracy)
+```
+We see more progress with the decision trees. The accuracy of the decision tree model is approximately 0.87, giving us more accuracy than both the neural network and logistic regression models.
+
+## Random Forest
+
+```{r}
+# Create a random forest and print the model
+rf <- randomForest(credit_score ~ ., data = df_train, ntree = 500)
+print(rf)
+```
+
+```{r}
+# Predict the credit scores on the test set and calculate accuracy
+rf_pred <- predict(rf, newdata = df_test)
+rf_accuracy <- mean(rf_pred == df_test$credit_score)
+rf_accuracy
+```
+The accuracy of the random tree model is approximately 0.89, giving us more accuracy than the decision tree, neural network, and logistic regression models.
+
+## Conclusion
+
+- We established the first 14 components are good predictors of credit score, and that the three best predictor variables seem to be "credit_mix", "payment_behaviour", and "num_of_loan".
+- We see that the random forest model is the most effective at predicting credit score with an accuracy of approximately 0.89.
+- We see that the decision tree model had an accuracy of approximately 0.87 and the random forest model had an accuracy of approximately 0.89, which are extremely close and are the two best models to use for predicting credit scores.
